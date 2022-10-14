@@ -420,7 +420,7 @@ hazcat_publish(const rmw_publisher_t * pub, void * msg, size_t len)
   lock_domain(&ref_bits->lock, 0xFF);
 
   // Release any remaining message copies
-  if (0 < ref_bits->interest_count) {
+  if (ref_bits->availability) {
     for (int d = 0; d < DOMAINS_PER_TOPIC; d++) {
       if (ref_bits->availability & (1 << d)) {
         entry_t * entry = get_entry(mq, d, i);
@@ -428,6 +428,7 @@ hazcat_publish(const rmw_publisher_t * pub, void * msg, size_t len)
         DEALLOCATE(src_alloc, entry->offset);
       }
     }
+    ref_bits->availability = 0;
   }
 
   // Store token in appropriate array, converting message pointer to expected offset value
@@ -580,6 +581,7 @@ hazcat_take(const rmw_subscription_t * sub)
         DEALLOCATE(src_alloc, entry->offset);
       }
     }
+    ref_bits->availability = 0;
   }
 
   // Update for next take
