@@ -17,6 +17,9 @@ extern "C"
 {
 #endif
 
+#include <sys/syscall.h>
+#include <unistd.h>
+
 #include <stdatomic.h>
 
 #include <cuda_runtime_api.h>
@@ -39,6 +42,7 @@ checkDrvError(CUresult res, const char * tok, const char * file, unsigned line)
 
 cuda_ringbuf_allocator_t * create_cuda_ringbuf_allocator(size_t item_size, size_t ring_size)
 {
+  cuInit(0);
   CUmemAllocationProp props = {};
   props.type = CU_MEM_ALLOCATION_TYPE_PINNED;
   props.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
@@ -123,6 +127,7 @@ cuda_ringbuf_allocator_t * create_cuda_ringbuf_allocator(size_t item_size, size_
   alloc->item_size = item_size;
   alloc->ring_size = ring_size;   // TODO(nightduck): Expand to fill rest of page
   alloc->ipc_handle = ipc_handle;
+  alloc->original_pid = getpid();
   alloc->pool_offset = (uint8_t *)(uintptr_t)dev_boundary - (uint8_t *)alloc;
   return alloc;
 }
@@ -270,6 +275,10 @@ struct hma_allocator * cuda_ringbuf_remap(struct hma_allocator * temp)
   cuda_alloc = shared_mapping - sizeof(fps_t);
   populate_local_fn_pointers(cuda_alloc, temp->device_type << 12 | temp->strategy);
   cuda_alloc->untyped.data = (void *)(uintptr_t)d_addr;
+
+  // TODO: Verify this works quickly
+  // Compute file descriptor in this process
+  int new_fd = syscall(SYS_pidfd_getfd, cuda_alloc->ipc_handle, cuda_alloc->original_pid, 0);
 
   // Get shareable handle
   CUmemGenericAllocationHandle handle;

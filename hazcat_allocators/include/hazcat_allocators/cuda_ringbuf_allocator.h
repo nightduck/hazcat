@@ -54,6 +54,7 @@ typedef struct cuda_ringbuf_allocator
   int ring_size;
   int pool_offset;
   ShareableHandle ipc_handle;
+  int original_pid;
 } cuda_ringbuf_allocator_t;
 
 cuda_ringbuf_allocator_t * create_cuda_ringbuf_allocator(size_t item_size, size_t ring_size);
