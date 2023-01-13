@@ -32,6 +32,8 @@ extern "C"
 #include "hazcat/hashtable.h"
 #include "hazcat/hazcat_message_queue.h"
 
+#include "semaphore.h"
+
 
 char fifo_file[NAME_MAX] = "/tmp/ros2_hazcat";
 char shmem_file[NAME_MAX] = "/ros2_hazcat";
@@ -87,8 +89,10 @@ inline ref_bits_t * get_ref_bits(message_queue_t * mq, int i)
 
 inline entry_t * get_entry(message_queue_t * mq, int domain, int i)
 {
-  return (entry_t *)((uint8_t *)mq + sizeof(message_queue_t) + mq->len * sizeof(ref_bits_t) +
+  entry_t * e = (entry_t *)((uint8_t *)mq + sizeof(message_queue_t) + mq->len * sizeof(ref_bits_t) +
          domain * mq->len * sizeof(entry_t) + i * sizeof(entry_t));
+  //assert((uint8_t*)mq + _SC_PAGE_SIZE > (uint8_t*)e);
+  return e;
 }
 
 hma_allocator_t * lookup_allocator(int shmem_id)
@@ -282,8 +286,8 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
 
     // TODO(nightduck): Use history policy more intelligently so page alignment can reccomend depth
     // Calculate new size
-    size_t mq_size = sizeof(message_queue_t) + data->depth * sizeof(ref_bits_t) +
-      data->depth * mq->num_domains * sizeof(entry_t);
+    size_t mq_size = sizeof(message_queue_t) + mq->len * sizeof(ref_bits_t) +
+      mq->len * mq->num_domains * sizeof(entry_t);
 
     // Remove old copy
     if (-1 == munmap(mq, st.st_size)) {
@@ -308,6 +312,7 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
       RMW_SET_ERROR_MSG("Failed to map shared message queue into process");
       return RMW_RET_ERROR;
     }
+    it->elem = mq;
   }
 
   // Let publisher know where to find its message queue
@@ -394,6 +399,7 @@ hazcat_register_subscription(rmw_subscription_t * sub)
 rmw_ret_t
 hazcat_publish(const rmw_publisher_t * pub, void * msg, size_t len)
 {
+  // TODO(nightduck): Need to acquire write lock instead
   // Acquire lock on shared file
   struct flock fl = {F_RDLCK, SEEK_SET, 0, 0, 0};
   if (-1 == fcntl(((pub_sub_data_t *)pub->data)->mq->fd, F_SETLKW, &fl)) {
@@ -501,11 +507,14 @@ hazcat_take(const rmw_subscription_t * sub)
     ret.alloc = NULL;
     ret.msg = NULL;
     return ret;
+
+    // TODO: Free read lock
   }
 
   // Get message entry
   msg_ref_t ret;
   ref_bits_t * ref_bits = get_ref_bits(mq, i);
+  lock_domain(&ref_bits->lock, 1 << ((pub_sub_data_t *)sub->data)->array_num);
   if ((1 << ((pub_sub_data_t *)sub->data)->array_num) & ref_bits->availability) {
     // Message in preferred domain
     entry_t * entry = get_entry(mq, ((pub_sub_data_t *)sub->data)->array_num, i);
@@ -531,6 +540,7 @@ hazcat_take(const rmw_subscription_t * sub)
     while ((1 << d) & ~ref_bits->availability) {
       d++;
     }
+    lock_domain(&ref_bits->lock, 1 << d);
     entry_t * entry = get_entry(mq, d, i);
 
     // Lookup src allocator with hashtable mapping shm id to mem address
@@ -555,6 +565,8 @@ hazcat_take(const rmw_subscription_t * sub)
       COPY(alloc, here, src_alloc, msg, entry->len);
     }
 
+    // TODO(nightduck): Acquire write lock
+
     // Store our copy for others to use
     int len = entry->len;
     entry = get_entry(mq, ((pub_sub_data_t *)sub->data)->array_num, i);
@@ -568,13 +580,16 @@ hazcat_take(const rmw_subscription_t * sub)
     ret.alloc = alloc;
     ret.msg = here;
 
+    // Make another reference for subscriber
+    SHARE(alloc, entry->offset);
+
     // DEBUGGING
     // dump_message_queue(mq);
   }
 
   // Message queue holds one copy of each message. If this is the last subscriber, free it
   if (--(ref_bits->interest_count) <= 0) {
-    for (int d = 0; d < mq->num_domains; d++) {
+    for (int d = 0; d < DOMAINS_PER_TOPIC; d++) { //mq->num_domains; d++) { // TODO(nightduck): Fix bug where num_domains gets reset to 1
       if (ref_bits->availability & (1 << d)) {
         entry_t * entry = get_entry(mq, d, i);
         hma_allocator_t * src_alloc = lookup_allocator(entry->alloc_shmem_id);
@@ -583,6 +598,7 @@ hazcat_take(const rmw_subscription_t * sub)
     }
     ref_bits->availability = 0;
   }
+  ref_bits->lock = 0;
 
   // Update for next take
   ((pub_sub_data_t *)sub->data)->next_index = (i + 1) % mq->len;
@@ -737,6 +753,7 @@ get_matching_alloc(const rmw_subscription_t * sub, const void * msg)
   // dump_message_queue(mq);
 
   int recent = ((pub_sub_data_t *)sub->data)->next_index;
+  sem_wait(&((pub_sub_data_t *)sub->data)->lock);
   if (recent < ((pub_sub_data_t *)sub->data)->depth) {
     recent += mq->len;
   }
@@ -744,12 +761,21 @@ get_matching_alloc(const rmw_subscription_t * sub, const void * msg)
     int index = (recent - i) % mq->len;
     entry_t * entry = get_entry(mq, ((pub_sub_data_t *)sub->data)->array_num, index);
 
+    if (0 == entry->alloc_shmem_id) {
+      // printf("warning. domain %d, index %d : %d, %d, %d\n",
+      //   ((pub_sub_data_t *)sub->data)->array_num, index, entry->alloc_shmem_id,
+      //   entry->len, entry->offset);
+      continue;
+    }
+
     hma_allocator_t * msg_alloc = lookup_allocator(entry->alloc_shmem_id);
     void * entry_msg = GET_PTR(msg_alloc, entry->offset, void);
     if (entry_msg == msg) {
+      sem_post(&((pub_sub_data_t *)sub->data)->lock);
       return msg_alloc;
     }
   }
+  sem_post(&((pub_sub_data_t *)sub->data)->lock);
 
   // Message doesn't match
   return NULL;

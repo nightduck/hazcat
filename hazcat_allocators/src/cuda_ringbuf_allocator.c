@@ -19,6 +19,7 @@ extern "C"
 
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include <stdatomic.h>
 
@@ -37,12 +38,23 @@ checkDrvError(CUresult res, const char * tok, const char * file, unsigned line)
     abort();
   }
 }
+inline void
+gpuAssert(cudaError_t code, const char *file, int line, int abort)
+{
+   if (code != cudaSuccess) 
+   {
+      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
 
 #define CHECK_DRV(x) checkDrvError(x, #x, __FILE__, __LINE__);
 
+#define CUDA_CHK(ans) { gpuAssert((ans), __FILE__, __LINE__, 1); }
+
 cuda_ringbuf_allocator_t * create_cuda_ringbuf_allocator(size_t item_size, size_t ring_size)
 {
-  cuInit(0);
+  CHECK_DRV(cuInit(0));
   CUmemAllocationProp props = {};
   props.type = CU_MEM_ALLOCATION_TYPE_PINNED;
   props.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
@@ -111,6 +123,9 @@ cuda_ringbuf_allocator_t * create_cuda_ringbuf_allocator(size_t item_size, size_
   // cuMemMap
   CHECK_DRV(cuMemMap(dev_boundary, pool_size, 0, original_handle, 0));
 
+  // cudaIpcMemHandle_t ipc_handle;
+  // CUDA_CHK(cudaIpcGetMemHandle(&ipc_handle, (void*)original_handle));
+
   // cuMemSetAccess
   CUmemAccessDesc accessDesc;
   accessDesc.location.id = 0;
@@ -129,12 +144,16 @@ cuda_ringbuf_allocator_t * create_cuda_ringbuf_allocator(size_t item_size, size_
   alloc->ipc_handle = ipc_handle;
   alloc->original_pid = getpid();
   alloc->pool_offset = (uint8_t *)(uintptr_t)dev_boundary - (uint8_t *)alloc;
+
+  // printf("0x%x   create:   ring_size: %d, pool offset: %d\n", (uint8_t*)alloc, alloc->ring_size, alloc->pool_offset);
   return alloc;
 }
 
 int cuda_ringbuf_allocate(void * self, size_t size)
 {
   struct cuda_ringbuf_allocator * s = (struct cuda_ringbuf_allocator *)self;
+
+  // printf("0x%x allocate:   count: %d, rear_it: %d, size req: %d\n", (uint8_t*)self, s->count, s->rear_it, size);
 
   if (s->count == s->ring_size) {
     // Allocator full
@@ -153,6 +172,7 @@ int cuda_ringbuf_allocate(void * self, size_t size)
     // Update count of how many elements in pool
     s->count++;
 
+    // printf("                      count: %d, rear_it: %d,   offset: %d\n", s->count, s->rear_it, ret);
     return ret;
   }
 
@@ -172,6 +192,8 @@ void cuda_ringbuf_share(void * self, int offset)
 void cuda_ringbuf_deallocate(void * self, int offset)
 {
   struct cuda_ringbuf_allocator * s = (struct cuda_ringbuf_allocator *)self;
+
+  // printf("0x%x deallocate: count: %d, rear_it: %d,   offset: %d\n", (uint8_t*)self, s->count, s->rear_it, offset);
   if (s->count == 0) {
     return;       // Allocator empty, nothing to deallocate
   }
@@ -181,7 +203,12 @@ void cuda_ringbuf_deallocate(void * self, int offset)
 
   // Decrement reference counter and only go through with deallocate if it's zero
   atomic_uint * ref_count = (uint8_t *)self + sizeof(struct cuda_ringbuf_allocator);
-  if (--ref_count[entry] > 0) {
+  // printf("                      refcounts [%d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d]\n",
+  //     ref_count[0], ref_count[1], ref_count[2], ref_count[3], ref_count[4], ref_count[5],
+  //     ref_count[6], ref_count[7], ref_count[8], ref_count[9], ref_count[10], ref_count[11]);
+  if (atomic_fetch_add(&ref_count[entry], -1) > 1) {
+    // printf("          ref count > 0\n");
+    //ref_count[entry]--;
     return;
   }
 
@@ -191,10 +218,19 @@ void cuda_ringbuf_deallocate(void * self, int offset)
     entry += s->ring_size;
   }
 
+  if (__glibc_unlikely(entry >= forward_it)) {
+    // Invalid argument, already deallocated
+    return;
+  }
+
   // Most likely scenario: entry == rear_it as allocations are deallocated in order
   s->rear_it = entry + 1;
   s->count = forward_it - s->rear_it;
   s->rear_it %= s->ring_size;
+
+  // printf("                      entry: %d forward_it: %d count: %d, rear_it: %d\n", 
+  //     entry, forward_it, s->count, s->rear_it);
+  return;
 }
 
 void cuda_ringbuf_copy_from(void * here, void * there, size_t size)
@@ -278,7 +314,10 @@ struct hma_allocator * cuda_ringbuf_remap(struct hma_allocator * temp)
 
   // TODO: Verify this works quickly
   // Compute file descriptor in this process
-  int new_fd = syscall(SYS_pidfd_getfd, cuda_alloc->ipc_handle, cuda_alloc->original_pid, 0);
+  //int new_fd = syscall(SYS_pidfd_getfd, cuda_alloc->ipc_handle, cuda_alloc->original_pid, 0);
+  // char fd_path[64];  // actual maximal length: 37 for 64bit systems
+  // snprintf(fd_path, sizeof(fd_path), "/proc/%d/fd/%d", cuda_alloc->original_pid, cuda_alloc->ipc_handle);
+  // int new_fd = open(fd_path, O_RDWR);
 
   // Get shareable handle
   CUmemGenericAllocationHandle handle;
@@ -286,6 +325,11 @@ struct hma_allocator * cuda_ringbuf_remap(struct hma_allocator * temp)
     cuMemImportFromShareableHandle(
       &handle, (void *)(uintptr_t)(cuda_alloc->ipc_handle),
       CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR));
+
+  // // TODO: Fix work around
+  // void * tmp_mapping;
+  // CUDA_CHK(cudaIpcOpenMemHandle(&tmp_mapping, cuda_alloc->ipc_handle, cudaIpcMemLazyEnablePeerAccess)); // Open shared memory in random spot
+  // CHECK_DRV(cuMemRetainAllocationHandle(&handle, tmp_mapping)); // Get handle from mapped memory, so we can remap it in the correct spot
 
   // Calculate where device mapping starts
   void * dev_boundary = (uint8_t *)shared_mapping + buf.shm_segsz;
@@ -302,6 +346,8 @@ struct hma_allocator * cuda_ringbuf_remap(struct hma_allocator * temp)
 
   // Free handle. Memory will stay valid as long as it is mapped
   CHECK_DRV(cuMemRelease(handle));
+
+  // CUDA_CHK(cudaIpcCloseMemHandle(tmp_mapping));
 
   // alloc is partially constructed at this point. The local portion will be created and populated
   // by remap_shared_allocator, which calls this function

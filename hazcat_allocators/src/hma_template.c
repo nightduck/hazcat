@@ -180,6 +180,7 @@ struct hma_allocator * remap_shared_allocator(int shmem_id)
   if (MAP_FAILED == shared_portion) {
     printf("remap_shared_allocator failed on creation of shared portion\n");
     handle_error("shmat");
+    return NULL;
   }
   hma_allocator_t * temp = shared_portion - sizeof(fps_t);
 

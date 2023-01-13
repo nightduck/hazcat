@@ -22,6 +22,9 @@ extern "C"
 
 #include <stdio.h>
 
+#include <cuda_runtime_api.h>
+#include <cuda.h>
+
 #include "hazcat_allocators/hma_template.h"
 
 #define CUDA_RINGBUF_IMPL    CUDA << 12 | ALLOC_RING

@@ -22,6 +22,8 @@
 
 #include "hazcat_allocators/hma_template.h"
 
+#include "semaphore.h"
+
 #ifndef HAZCAT__TYPES_H_
 #define HAZCAT__TYPES_H_
 
@@ -131,6 +133,7 @@ typedef struct pub_sub_data
   size_t msg_size;          // Upperbound of message size
   rmw_gid_t gid;            // gid of publisher
   rmw_context_t * context;
+  sem_t lock;
   // int signalfd;          // fd of an empty FIFO used to generate signals for message availability
 } pub_sub_data_t;
 
