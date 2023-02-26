@@ -45,7 +45,10 @@ int cpu_ringbuf_allocate(void * self, size_t size)
   cpu_ringbuf_allocator_t * s = (cpu_ringbuf_allocator_t *)self;
   if (s->count == s->ring_size) {
     // Allocator full
-    return -1;
+    s->rear_it++;
+  } else {
+    // Update count of how many elements in pool
+    s->count++;
   }
   int forward_it = (s->rear_it + s->count) % s->ring_size;
 
@@ -57,8 +60,6 @@ int cpu_ringbuf_allocate(void * self, size_t size)
   atomic_int * ref_count = (atomic_int *)(self + ret - sizeof(atomic_int));
   atomic_store(ref_count, 1);
 
-  // Update count of how many elements in pool
-  s->count++;
 
   return ret;
 }
