@@ -58,12 +58,12 @@ hazcat_register_subscription(rmw_subscription_t * sub);
 
 // Stores allocator reference and message offset into message queue, has write lock on row
 rmw_ret_t
-hazcat_publish(const rmw_publisher_t * pub, void * msg, size_t len);
+hazcat_publish(const pub_data_t * pub, void * msg, size_t len);
 
 // Take's loaned message for subscriber, copying it into the correct memory domain, if needed.
 // Will respect history QoS settings and skip over stale messages
 msg_ref_t
-hazcat_take(const rmw_subscription_t * sub);
+hazcat_take(sub_data_t * sub);
 
 rmw_ret_t
 hazcat_unregister_publisher(rmw_publisher_t * pub);

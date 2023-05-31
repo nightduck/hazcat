@@ -137,6 +137,10 @@ typedef struct pub_sub_data
   // int signalfd;          // fd of an empty FIFO used to generate signals for message availability
 } pub_sub_data_t;
 
+// Aliases for pub_sub_data_t for convenience
+typedef pub_sub_data_t sub_data_t;
+typedef pub_sub_data_t pub_data_t;
+
 typedef struct srv_clt_data
 {
   int dummy;

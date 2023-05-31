@@ -397,19 +397,19 @@ hazcat_register_subscription(rmw_subscription_t * sub)
 }
 
 rmw_ret_t
-hazcat_publish(const rmw_publisher_t * pub, void * msg, size_t len)
+hazcat_publish(const pub_data_t * pub, void * msg, size_t len)
 {
   // TODO(nightduck): Need to acquire write lock instead
   // Acquire lock on shared file
   struct flock fl = {F_RDLCK, SEEK_SET, 0, 0, 0};
-  if (-1 == fcntl(((pub_sub_data_t *)pub->data)->mq->fd, F_SETLKW, &fl)) {
+  if (-1 == fcntl(pub->mq->fd, F_SETLKW, &fl)) {
     RMW_SET_ERROR_MSG("Couldn't acquire read-lock on shared message queue");
     return RMW_RET_ERROR;
   }
 
-  hma_allocator_t * alloc = ((pub_sub_data_t *)pub->data)->alloc;
-  message_queue_t * mq = ((pub_sub_data_t *)pub->data)->mq->elem;
-  int domain_col = ((pub_sub_data_t *)pub->data)->array_num;
+  hma_allocator_t * alloc = pub->alloc;
+  message_queue_t * mq = pub->mq->elem;
+  int domain_col = pub->array_num;
 
   // Get current value of index to publish into, then increment index for next guy
   atomic_int i = atomic_fetch_add(&(mq->index), 1);
@@ -454,7 +454,7 @@ hazcat_publish(const rmw_publisher_t * pub, void * msg, size_t len)
 
   // Release lock on shared file
   fl.l_type = F_UNLCK;
-  if (-1 == fcntl(((pub_sub_data_t *)pub->data)->mq->fd, F_SETLK, &fl)) {
+  if (-1 == fcntl(pub->mq->fd, F_SETLK, &fl)) {
     perror("fcntl");
     RMW_SET_ERROR_MSG("Couldn't release read-lock on shared message queue");
     return RMW_RET_ERROR;
@@ -462,13 +462,13 @@ hazcat_publish(const rmw_publisher_t * pub, void * msg, size_t len)
 
   // Signal that data was published
   // Signals aren't being caught be epoll and I have no idea why
-  // if (-1 == fcntl(((pub_sub_data_t *)pub->data)->mq->signalfd, F_SETSIG, SIGMSG)) {
+  // if (-1 == fcntl(pub->mq->signalfd, F_SETSIG, SIGMSG)) {
   //   perror("fcntl");
   //   RMW_SET_ERROR_MSG("Failed to signal message availability");
   //   return RMW_RET_ERROR;
   // }
   char dummy = 'e';
-  if (0 >= write(((pub_sub_data_t *)pub->data)->mq->signalfd, &dummy, 1)) {
+  if (0 >= write(pub->mq->signalfd, &dummy, 1)) {
     perror("write");
     RMW_SET_ERROR_MSG("Failed to signal message availability");
     return RMW_RET_ERROR;
@@ -480,11 +480,11 @@ hazcat_publish(const rmw_publisher_t * pub, void * msg, size_t len)
 // TODO(nightduck): Refactor alloc and message as argument references, and return
 // rmw_ret_t value
 msg_ref_t
-hazcat_take(const rmw_subscription_t * sub)
+hazcat_take(sub_data_t * sub)
 {
   // Acquire lock on shared file
   struct flock fl = {F_RDLCK, SEEK_SET, 0, 0, 0};
-  if (-1 == fcntl(((pub_sub_data_t *)sub->data)->mq->fd, F_SETLKW, &fl)) {
+  if (-1 == fcntl(sub->mq->fd, F_SETLKW, &fl)) {
     RMW_SET_ERROR_MSG("Couldn't acquire read-lock on shared message queue");
     msg_ref_t ret;
     ret.alloc = NULL;
@@ -492,12 +492,12 @@ hazcat_take(const rmw_subscription_t * sub)
     return ret;
   }
 
-  hma_allocator_t * alloc = ((pub_sub_data_t *)sub->data)->alloc;
-  message_queue_t * mq = ((pub_sub_data_t *)sub->data)->mq->elem;
+  hma_allocator_t * alloc = sub->alloc;
+  message_queue_t * mq = sub->mq->elem;
 
   // Find next relevant message (skip over stale messages if we missed them)
-  int i = ((pub_sub_data_t *)sub->data)->next_index;
-  int history = ((pub_sub_data_t *)sub->data)->depth;
+  int i = sub->next_index;
+  int history = sub->depth;
   i = ((mq->index + mq->len - i) % mq->len > history) ?
     (mq->index + mq->len - history) % mq->len : i;
 
@@ -514,10 +514,10 @@ hazcat_take(const rmw_subscription_t * sub)
   // Get message entry
   msg_ref_t ret;
   ref_bits_t * ref_bits = get_ref_bits(mq, i);
-  lock_domain(&ref_bits->lock, 1 << ((pub_sub_data_t *)sub->data)->array_num);
-  if ((1 << ((pub_sub_data_t *)sub->data)->array_num) & ref_bits->availability) {
+  lock_domain(&ref_bits->lock, 1 << sub->array_num);
+  if ((1 << sub->array_num) & ref_bits->availability) {
     // Message in preferred domain
-    entry_t * entry = get_entry(mq, ((pub_sub_data_t *)sub->data)->array_num, i);
+    entry_t * entry = get_entry(mq, sub->array_num, i);
 
     // Lookup src allocator with hashtable mapping shm id to mem address
     hma_allocator_t * src_alloc = lookup_allocator(entry->alloc_shmem_id);
@@ -569,13 +569,13 @@ hazcat_take(const rmw_subscription_t * sub)
 
     // Store our copy for others to use
     int len = entry->len;
-    entry = get_entry(mq, ((pub_sub_data_t *)sub->data)->array_num, i);
+    entry = get_entry(mq, sub->array_num, i);
     entry->alloc_shmem_id = alloc->shmem_id;
     entry->offset = PTR_TO_OFFSET(alloc, here);
     entry->len = len;
 
     // Enable this domain on the availability bitmask
-    ref_bits->availability |= (1 << ((pub_sub_data_t *)sub->data)->array_num);
+    ref_bits->availability |= (1 << sub->array_num);
 
     ret.alloc = alloc;
     ret.msg = here;
@@ -601,11 +601,11 @@ hazcat_take(const rmw_subscription_t * sub)
   ref_bits->lock = 0;
 
   // Update for next take
-  ((pub_sub_data_t *)sub->data)->next_index = (i + 1) % mq->len;
+  sub->next_index = (i + 1) % mq->len;
 
   // Release lock on shared file
   fl.l_type = F_UNLCK;
-  if (-1 == fcntl(((pub_sub_data_t *)sub->data)->mq->fd, F_SETLK, &fl)) {
+  if (-1 == fcntl(sub->mq->fd, F_SETLK, &fl)) {
     RMW_SET_ERROR_MSG("Couldn't release read-lock on shared message queue");
     // TODO(nightduck): Return something?
   }
