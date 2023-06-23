@@ -31,3 +31,7 @@ Each publisher and subscriber needs an affiliated allocator. Each allocator its 
 * **copy_from** - Copies memory from allocator into another place in host memory
 * **copy_to** - Copies memory from host memory into allocator's memory pool
 * **copy** - Copies memory from this allocator into another allocator. This call is often just a wrapper for calling copy_from and copy_to in sequence.
+
+## ROS2
+
+An [RMW](https://github.com/nightduck/rmw_hazcat) has been written for Hazcat to implement it as a DDS layer in ROS2
