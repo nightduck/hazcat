@@ -153,7 +153,7 @@ int cuda_ringbuf_allocate(void * self, size_t size)
 {
   struct cuda_ringbuf_allocator * s = (struct cuda_ringbuf_allocator *)self;
 
-  printf("0x%x allocate:   count: %d, rear_it: %d, size req: %d\n", (uint8_t*)self, s->count, s->rear_it, size);
+  // printf("0x%x allocate:   count: %d, rear_it: %d, size req: %d\n", (uint8_t*)self, s->count, s->rear_it, size);
 
   if (s->count == s->ring_size) {
     // Allocator full
@@ -167,38 +167,38 @@ int cuda_ringbuf_allocate(void * self, size_t size)
 
   // Set the reference counter to be 1
   atomic_uint * ref_count = (uint8_t *)self + sizeof(struct cuda_ringbuf_allocator);
-  printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
-  printf("                      allocating...\n");
+  // printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
+  // printf("                      allocating...\n");
   ref_count[forward_it] = 1;
 
   // TODO(nightduck): Redo this to consider page alignment and the array of reference pointers in
   // CPU memory. Give address relative to shared object
   int ret = s->pool_offset + s->item_size * forward_it;
-  printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
-  printf("                      count: %d, rear_it: %d,   offset: %d\n", s->count, s->rear_it, ret);
+  // printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
+  // printf("                      count: %d, rear_it: %d,   offset: %d\n", s->count, s->rear_it, ret);
   return ret;
 }
 
 void cuda_ringbuf_share(void * self, int offset)
 {
   struct cuda_ringbuf_allocator * s = (struct cuda_ringbuf_allocator *)self;
-  printf("0x%x share:      count: %d, rear_it: %d,   offset: %d\n", (uint8_t*)self, s->count, s->rear_it, offset);
+  // printf("0x%x share:      count: %d, rear_it: %d,   offset: %d\n", (uint8_t*)self, s->count, s->rear_it, offset);
 
   // TODO(nightduck): Redo this to consider page alignment
   int index = (offset - s->pool_offset) / s->item_size;
   atomic_uint * ref_count = (uint8_t *)self + sizeof(struct cuda_ringbuf_allocator);
-  printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
-  printf("                      sharing...\n");
+  // printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
+  // printf("                      sharing...\n");
   atomic_fetch_add(&ref_count[index], 1);
-  printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
-  printf("                      count: %d, rear_it: %d\n", s->count, s->rear_it);
+  // printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
+  // printf("                      count: %d, rear_it: %d\n", s->count, s->rear_it);
 }
 
 void cuda_ringbuf_deallocate(void * self, int offset)
 {
   struct cuda_ringbuf_allocator * s = (struct cuda_ringbuf_allocator *)self;
 
-  printf("0x%x deallocate: count: %d, rear_it: %d,   offset: %d\n", (uint8_t*)self, s->count, s->rear_it, offset);
+  // printf("0x%x deallocate: count: %d, rear_it: %d,   offset: %d\n", (uint8_t*)self, s->count, s->rear_it, offset);
   if (s->count == 0) {
     return;       // Allocator empty, nothing to deallocate
   }
@@ -208,14 +208,14 @@ void cuda_ringbuf_deallocate(void * self, int offset)
 
   // Decrement reference counter and only go through with deallocate if it's zero
   atomic_uint * ref_count = (uint8_t *)self + sizeof(struct cuda_ringbuf_allocator);
-  printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
+  // printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
   if (atomic_fetch_add(&ref_count[entry], -1) > 1) {
-    printf("          ref count > 0\n");
+    // printf("          ref count > 0\n");
     //ref_count[entry]--;
     return;
   }
 
-  printf("                      deallocating...\n");
+  // printf("                      deallocating...\n");
 
   // Do math with imaginary overflow indices so forward_it >= entry >= rear_it
   int forward_it = s->rear_it + s->count;
@@ -233,9 +233,9 @@ void cuda_ringbuf_deallocate(void * self, int offset)
   s->count = forward_it - s->rear_it;
   s->rear_it %= s->ring_size;
 
-  printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
-  printf("                      count: %d, rear_it: %d entry: %d forward_it: %d\n", 
-      s->count, s->rear_it, entry, forward_it);
+  // printf("                      refcounts [%d, %d, %d]\n", ref_count[0], ref_count[1], ref_count[2]);
+  // printf("                      count: %d, rear_it: %d entry: %d forward_it: %d\n", 
+      // s->count, s->rear_it, entry, forward_it);
   return;
 }
 

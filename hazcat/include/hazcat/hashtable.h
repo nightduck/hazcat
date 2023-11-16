@@ -37,6 +37,7 @@ typedef struct hashtable
 
 #define HASH(val, size) (val ^ 0xDEADBEEF) % size
 
+// Must be called before any other hashtable functions
 hashtable_t * hashtable_init(size_t len)
 {
   hashtable_t * table = (hashtable_t *)malloc(sizeof(hashtable_t) + len * sizeof(node_t));
@@ -51,11 +52,13 @@ hashtable_t * hashtable_init(size_t len)
   return table;
 }
 
+// Must be called before program exit
 void hashtable_fini(hashtable_t * ht)
 {
   free(ht);
 }
 
+// Inserts a key/value pair into the hashtable. If the key already exists, the value is updated
 void hashtable_insert(hashtable_t * ht, int key, void * val)
 {
   if (ht->count >= ht->len) {
@@ -146,8 +149,14 @@ void * hashtable_get(hashtable_t * ht, int key)
   return (it == NULL) ? it : it->val;    // Return either a match or a null pointer
 }
 
+// Removes a key/value pair from the hashtable. If the key does not exist, nothing happens
+// If hashtable_fini has been called, nothing happens
 void hashtable_remove(hashtable_t * ht, int key)
 {
+  if (ht == NULL) {
+    return;
+  }
+  
   node_t * front = &(ht->table[HASH(key, ht->len)]);
 
   // Special case: removing single item

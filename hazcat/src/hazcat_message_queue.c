@@ -45,6 +45,7 @@ mq_node_t mq_list = {NULL, NULL, -1, NULL};
 // Hash table linking all known allocators for this process (will be shared among message queues)
 hashtable_t * ht;
 
+// Must be called before using hazcat
 rmw_ret_t
 hazcat_init()
 {
@@ -57,6 +58,7 @@ hazcat_init()
   }
 }
 
+// Must be called before program shutdown
 rmw_ret_t
 hazcat_fini()
 {
@@ -72,7 +74,10 @@ hazcat_fini()
   mq_list.fd = -1;
   mq_list.file_name = NULL;
 
+  // TODO: Destroy all shared memory objects
+
   hashtable_fini(ht);
+  ht = NULL;
   return RMW_RET_OK;
 }
 
