@@ -95,7 +95,7 @@ inline ref_bits_t * get_ref_bits(message_queue_t * mq, int i)
 inline entry_t * get_entry(message_queue_t * mq, int domain, int i)
 {
   entry_t * e = (entry_t *)((uint8_t *)mq + sizeof(message_queue_t) + mq->len * sizeof(ref_bits_t) +
-         domain * mq->len * sizeof(entry_t) + i * sizeof(entry_t));
+    domain * mq->len * sizeof(entry_t) + i * sizeof(entry_t));
   //assert((uint8_t*)mq + _SC_PAGE_SIZE > (uint8_t*)e);
   return e;
 }
@@ -328,14 +328,14 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
 
 // TODO(nightduck): Don't need to specify qos, can extract from pub
 rmw_ret_t
-hazcat_register_publisher(rmw_publisher_t * pub)
+hazcat_register_publisher(pub_data_t * pub, const char * topic_name)
 {
-  int ret = hazcat_register_pub_or_sub(pub->data, pub->topic_name);  // Heavy lifting here
+  int ret = hazcat_register_pub_or_sub(pub, topic_name);  // Heavy lifting here
   if (RMW_RET_OK != ret) {
     return ret;
   }
 
-  mq_node_t * it = ((pub_sub_data_t *)pub->data)->mq;
+  mq_node_t * it = pub->mq;
 
   // TODO(nightduck): Generic macros in case I want to change the type of this thing.
   //       Eg (typeof(mq->pub_count))~(typeof(mq->pub_count))0
@@ -346,7 +346,7 @@ hazcat_register_publisher(rmw_publisher_t * pub)
     return RMW_RET_ERROR;
   }
 
-  // ((pub_sub_data_t *)pub->data)->signalfd = -1;
+  // pub->signalfd = -1;
 
   // Release lock
   struct flock fl = {F_UNLCK, SEEK_SET, 0, 0, 0};
@@ -359,18 +359,18 @@ hazcat_register_publisher(rmw_publisher_t * pub)
 }
 
 rmw_ret_t
-hazcat_register_subscription(rmw_subscription_t * sub)
+hazcat_register_subscription(sub_data_t * sub, const char * topic_name)
 {
-  int ret = hazcat_register_pub_or_sub(sub->data, sub->topic_name);  // Heavy lifting here
+  int ret = hazcat_register_pub_or_sub(sub, topic_name);  // Heavy lifting here
   if (RMW_RET_OK != ret) {
     return ret;
   }
 
-  mq_node_t * it = ((pub_sub_data_t *)sub->data)->mq;
+  mq_node_t * it = sub->mq;
 
   // Set next index to look at, ignore any existing messages in queue, this is in line with the
   // volatile rmw_qos_durability policy
-  ((pub_sub_data_t *)sub->data)->next_index = it->elem->index;
+  sub->next_index = it->elem->index;
 
   // TODO(nightduck): Generic macros in case I want to change the type of this thing.
   //       Eg (typeof(mq->pub_count))~(typeof(mq->pub_count))0
@@ -384,8 +384,8 @@ hazcat_register_subscription(rmw_subscription_t * sub)
   // sigset_t sigmask;
   // sigemptyset(&sigmask);
   // sigaddset(&sigmask, SIGMSG);
-  // ((pub_sub_data_t *)sub->data)->signalfd = signalfd(it->fd, &sigmask, SFD_NONBLOCK);
-  // if (((pub_sub_data_t *)sub->data)->signalfd == -1) {
+  // sub->signalfd = signalfd(it->fd, &sigmask, SFD_NONBLOCK);
+  // if (sub->signalfd == -1) {
   //   perror("signalfd: ");
   //   RMW_SET_ERROR_MSG("Unable to set signalfd for subscription\n");
   //   ret = RMW_RET_ERROR;
@@ -619,19 +619,19 @@ hazcat_take(sub_data_t * sub)
 }
 
 rmw_ret_t
-hazcat_unregister_publisher(rmw_publisher_t * pub)
+hazcat_unregister_publisher(pub_data_t * pub)
 {
   // TODO(nightduck): What if different publishers use the same allocator?
-  hashtable_remove(ht, ((pub_sub_data_t *)pub->data)->alloc->shmem_id);
+  hashtable_remove(ht, pub->alloc->shmem_id);
 
-  mq_node_t * it = ((pub_sub_data_t *)pub->data)->mq;
+  mq_node_t * it = pub->mq;
   if (NULL == it) {
     RMW_SET_ERROR_MSG("Publisher not registered");
     return RMW_RET_INVALID_ARGUMENT;
   }
 
   // Remove pub's reference to the message queue
-  ((pub_sub_data_t *)pub->data)->mq = NULL;
+  pub->mq = NULL;
 
   // Acquire lock on message queue
   struct flock fl = {F_WRLCK, SEEK_SET, 0, 0, 0};
@@ -688,19 +688,19 @@ hazcat_unregister_publisher(rmw_publisher_t * pub)
 }
 
 rmw_ret_t
-hazcat_unregister_subscription(rmw_subscription_t * sub)
+hazcat_unregister_subscription(sub_data_t * sub)
 {
   // TODO(nightduck): What if different subscriptions use the same allocator?
-  hashtable_remove(ht, ((pub_sub_data_t *)sub->data)->alloc->shmem_id);
+  hashtable_remove(ht, sub->alloc->shmem_id);
 
-  mq_node_t * it = ((pub_sub_data_t *)sub->data)->mq;
+  mq_node_t * it = sub->mq;
   if (NULL == it) {
     RMW_SET_ERROR_MSG("Publisher not registered");
     return RMW_RET_INVALID_ARGUMENT;
   }
 
   // Remove pub's reference to the message queue
-  ((pub_sub_data_t *)sub->data)->mq = NULL;
+  sub->mq = NULL;
 
   // Acquire lock on message queue
   struct flock fl = {F_WRLCK, SEEK_SET, 0, 0, 0};
@@ -751,24 +751,24 @@ hazcat_unregister_subscription(rmw_subscription_t * sub)
 
 // TODO(nightduck): Implement read lock. Otherwise, this creates an cosmetic race condition.
 hma_allocator_t *
-get_matching_alloc(const rmw_subscription_t * sub, const void * msg)
+get_matching_alloc(const sub_data_t * sub, const void * msg)
 {
-  message_queue_t * mq = ((pub_sub_data_t *)sub->data)->mq->elem;
+  message_queue_t * mq = sub->mq->elem;
 
   // dump_message_queue(mq);
 
-  int recent = ((pub_sub_data_t *)sub->data)->next_index;
-  sem_wait(&((pub_sub_data_t *)sub->data)->lock);
-  if (recent < ((pub_sub_data_t *)sub->data)->depth) {
+  int recent = sub->next_index;
+  sem_wait(&sub->lock);
+  if (recent < sub->depth) {
     recent += mq->len;
   }
-  for (int i = 1; i < ((pub_sub_data_t *)sub->data)->depth; i++) {
+  for (int i = 1; i < sub->depth; i++) {
     int index = (recent - i) % mq->len;
-    entry_t * entry = get_entry(mq, ((pub_sub_data_t *)sub->data)->array_num, index);
+    entry_t * entry = get_entry(mq, sub->array_num, index);
 
     if (0 == entry->alloc_shmem_id) {
       // printf("warning. domain %d, index %d : %d, %d, %d\n",
-      //   ((pub_sub_data_t *)sub->data)->array_num, index, entry->alloc_shmem_id,
+      //   sub->array_num, index, entry->alloc_shmem_id,
       //   entry->len, entry->offset);
       continue;
     }
@@ -776,11 +776,11 @@ get_matching_alloc(const rmw_subscription_t * sub, const void * msg)
     hma_allocator_t * msg_alloc = lookup_allocator(entry->alloc_shmem_id);
     void * entry_msg = GET_PTR(msg_alloc, entry->offset, void);
     if (entry_msg == msg) {
-      sem_post(&((pub_sub_data_t *)sub->data)->lock);
+      sem_post(&sub->lock);
       return msg_alloc;
     }
   }
-  sem_post(&((pub_sub_data_t *)sub->data)->lock);
+  sem_post(&sub->lock);
 
   // Message doesn't match
   return NULL;

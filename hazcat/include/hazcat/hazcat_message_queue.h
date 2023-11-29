@@ -47,14 +47,14 @@ hazcat_fini();
 // the publisher, it will be resized. Messages will not be able to be published or taken while
 // this resize operation is taking place
 rmw_ret_t
-hazcat_register_publisher(rmw_publisher_t * pub);
+hazcat_register_publisher(pub_data_t * pub, const char * topic_name);
 
 // Registers a subscription with the zero copy buffer associated with it's name. If none exists, one
 // is created. If an existing one does not accommodate the memory domain or history requirements of
 // the subscription, it will be resized. Messages will not be able to be published or taken while
 // this resize operation is taking place
 rmw_ret_t
-hazcat_register_subscription(rmw_subscription_t * sub);
+hazcat_register_subscription(sub_data_t * sub, const char * topic_name);
 
 // Stores allocator reference and message offset into message queue, has write lock on row
 rmw_ret_t
@@ -66,13 +66,13 @@ msg_ref_t
 hazcat_take(sub_data_t * sub);
 
 rmw_ret_t
-hazcat_unregister_publisher(rmw_publisher_t * pub);
+hazcat_unregister_publisher(pub_data_t * pub);
 
 rmw_ret_t
-hazcat_unregister_subscription(rmw_subscription_t * sub);
+hazcat_unregister_subscription(sub_data_t * sub);
 
 hma_allocator_t *
-get_matching_alloc(const rmw_subscription_t * sub, const void * msg);
+get_matching_alloc(const sub_data_t * sub, const void * msg);
 
 // Used for debugging
 void
