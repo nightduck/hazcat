@@ -46,20 +46,20 @@ mq_node_t mq_list = {NULL, NULL, -1, NULL};
 hashtable_t * ht;
 
 // Must be called before using hazcat
-rmw_ret_t
+int
 hazcat_init()
 {
   ht = hashtable_init(128);
   if (NULL == ht) {
     RMW_SET_ERROR_MSG("Couldn't initialize hazcat middleware");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_OK;
   } else {
-    return RMW_RET_OK;
+    return HAZCAT_RET_OK;
   }
 }
 
 // Must be called before program shutdown
-rmw_ret_t
+int
 hazcat_fini()
 {
   // Clear mq list, any existing entries are in use by other processes
@@ -78,7 +78,7 @@ hazcat_fini()
 
   hashtable_fini(ht);
   ht = NULL;
-  return RMW_RET_OK;
+  return HAZCAT_RET_OK;
 }
 
 inline void lock_domain(atomic_uint_fast32_t * lock, int bit_mask)
@@ -112,7 +112,7 @@ hma_allocator_t * lookup_allocator(int shmem_id)
 }
 
 // Convenient utility method since 95% of registering subscription is same as registering publisher
-rmw_ret_t
+int
 hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
 {
   // Register associated allocator, so we can lookup address given shared mem id
@@ -138,12 +138,12 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
     char * file_name = rmw_allocate(strlen(shmem_file) + 1);
     if (NULL == file_name) {
       RMW_SET_ERROR_MSG("Failed to allocate string for filename");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
     it = rmw_allocate(sizeof(mq_node_t));
     if (NULL == it) {
       RMW_SET_ERROR_MSG("Failed to allocate memory for mq_node_t");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
 
     // Make it through the list without finding a match, so it hasn't been open here yet
@@ -151,7 +151,7 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
     if (-1 == fd) {
       RMW_SET_ERROR_MSG("Couldn't open shared message queue");
       printf("Couldn't open shared message queue, %s : %d\n", shmem_file, errno);
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
 
     // Create accompanying fifo to send signals with
@@ -161,7 +161,7 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
         perror("mkfifo: ");
         RMW_SET_ERROR_MSG("Couldn't create signaling fifo for topics");
         printf("Couldn't create signaling fifo for topics, %s : %d\n", fifo_file, errno);
-        return RMW_RET_ERROR;
+        return HAZCAT_RET_ERROR;
       }
       fifo_fd = open(fifo_file, O_RDWR | O_ASYNC);
     }
@@ -169,14 +169,14 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
       perror("open: ");
       printf("Couldn't create signaling fifo for topics, %s : %d\n", fifo_file, errno);
       RMW_SET_ERROR_MSG("Couldn't open signaling fifo for topics");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
 
     // Acquire lock on shared file
     struct flock fl = {F_WRLCK, SEEK_SET, 0, 0, 0};
     if (-1 == fcntl(fd, F_SETLKW, &fl)) {
       RMW_SET_ERROR_MSG("Couldn't acquire lock on shared message queue");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
 
     // Check size of file, if zero, we're the first to create it, so do some initializing
@@ -184,7 +184,7 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
     if (fstat(it->fd, &st)) {
       perror("fstat");
       RMW_SET_ERROR_MSG("Error getting size of potentially new message queue");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
     if (0 == st.st_size) {
       // TODO(nightduck): Use history policy more intelligently so page alignment can inform depth
@@ -192,13 +192,13 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
         data->depth * sizeof(entry_t);
       if (-1 == ftruncate(fd, mq_size)) {
         RMW_SET_ERROR_MSG("Couldn't resize shared message queue during creation");
-        return RMW_RET_ERROR;
+        return HAZCAT_RET_ERROR;
       }
 
       mq = mmap(NULL, mq_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
       if (MAP_FAILED == mq) {
         RMW_SET_ERROR_MSG("Failed to map shared message queue into process");
-        return RMW_RET_ERROR;
+        return HAZCAT_RET_ERROR;
       }
 
       mq->index = 0;
@@ -215,7 +215,7 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
       // // Get guard condition and copy it completely within message queue
       // rmw_guard_condition_t * gc;
       // if ((gc = rmw_create_guard_condition(data->context)) == NULL) {
-      //   return RMW_RET_ERROR;
+      //   return HAZCAT_RET_ERROR;
       // }
       // // TODO(nightduck): Make method for in place creation to avoid this memory leak
       // copy_guard_condition(&mq->gc, &mq->gc_impl, gc);
@@ -223,7 +223,7 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
       mq = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
       if (MAP_FAILED == mq) {
         RMW_SET_ERROR_MSG("Failed to map shared message queue into process");
-        return RMW_RET_ERROR;
+        return HAZCAT_RET_ERROR;
       }
     }
 
@@ -242,7 +242,7 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
     struct flock fl = {F_WRLCK, SEEK_SET, 0, 0, 0};
     if (fcntl(it->fd, F_SETLKW, &fl) == -1) {
       RMW_SET_ERROR_MSG("Couldn't acquire lock on shared message queue");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
   }
 
@@ -262,7 +262,7 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
         "Publisher registration failed."
         "Maximum number of memory domains per topic exceeded";
       RMW_SET_ERROR_MSG(err);
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
 
 
@@ -286,7 +286,7 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
     if (fstat(it->fd, &st)) {
       perror("fstat");
       RMW_SET_ERROR_MSG("Error getting size of message queue");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
 
     // TODO(nightduck): Use history policy more intelligently so page alignment can reccomend depth
@@ -297,25 +297,25 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
     // Remove old copy
     if (-1 == munmap(mq, st.st_size)) {
       RMW_SET_ERROR_MSG("Unable to unmap message queue during resize");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
 
     // Resize
     if (-1 == ftruncate(it->fd, mq_size)) {
       RMW_SET_ERROR_MSG("Couldn't resize shared message queue");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
 
     // Remap it
     if (fstat(it->fd, &st)) {
       perror("fstat");
       RMW_SET_ERROR_MSG("Error getting new size of message queue");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
     mq = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, it->fd, 0);
     if (MAP_FAILED == mq) {
       RMW_SET_ERROR_MSG("Failed to map shared message queue into process");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
     it->elem = mq;
   }
@@ -323,15 +323,15 @@ hazcat_register_pub_or_sub(pub_sub_data_t * data, const char * topic_name)
   // Let publisher know where to find its message queue
   data->mq = it;
 
-  return RMW_RET_OK;
+  return HAZCAT_RET_OK;
 }
 
 // TODO(nightduck): Don't need to specify qos, can extract from pub
-rmw_ret_t
+int
 hazcat_register_publisher(pub_data_t * pub, const char * topic_name)
 {
   int ret = hazcat_register_pub_or_sub(pub, topic_name);  // Heavy lifting here
-  if (RMW_RET_OK != ret) {
+  if (HAZCAT_RET_ERROR != ret) {
     return ret;
   }
 
@@ -343,7 +343,7 @@ hazcat_register_publisher(pub_data_t * pub, const char * topic_name)
     it->elem->pub_count++;
   } else {
     RMW_SET_ERROR_MSG("Maximum number of publishers exceeded on shared message queue");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
 
   // pub->signalfd = -1;
@@ -352,17 +352,17 @@ hazcat_register_publisher(pub_data_t * pub, const char * topic_name)
   struct flock fl = {F_UNLCK, SEEK_SET, 0, 0, 0};
   if (-1 == fcntl(it->fd, F_SETLK, &fl)) {
     RMW_SET_ERROR_MSG("Couldn't release lock on shared message queue");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
 
-  return RMW_RET_OK;
+  return HAZCAT_RET_OK;
 }
 
-rmw_ret_t
+int
 hazcat_register_subscription(sub_data_t * sub, const char * topic_name)
 {
   int ret = hazcat_register_pub_or_sub(sub, topic_name);  // Heavy lifting here
-  if (RMW_RET_OK != ret) {
+  if (HAZCAT_RET_OK != ret) {
     return ret;
   }
 
@@ -378,7 +378,7 @@ hazcat_register_subscription(sub_data_t * sub, const char * topic_name)
     it->elem->sub_count++;
   } else {
     RMW_SET_ERROR_MSG("Maximum number of publishers exceeded on shared message queue");
-    ret = RMW_RET_ERROR;
+    ret = HAZCAT_RET_ERROR;
   }
 
   // sigset_t sigmask;
@@ -395,13 +395,13 @@ hazcat_register_subscription(sub_data_t * sub, const char * topic_name)
   struct flock fl = {F_UNLCK, SEEK_SET, 0, 0, 0};
   if (-1 == fcntl(it->fd, F_SETLK, &fl)) {
     RMW_SET_ERROR_MSG("Couldn't release lock on shared message queue");
-    ret = RMW_RET_ERROR;
+    ret = HAZCAT_RET_ERROR;
   }
 
   return ret;
 }
 
-rmw_ret_t
+int
 hazcat_publish(const pub_data_t * pub, void * msg, size_t len)
 {
   // TODO(nightduck): Need to acquire write lock instead
@@ -409,7 +409,7 @@ hazcat_publish(const pub_data_t * pub, void * msg, size_t len)
   struct flock fl = {F_RDLCK, SEEK_SET, 0, 0, 0};
   if (-1 == fcntl(pub->mq->fd, F_SETLKW, &fl)) {
     RMW_SET_ERROR_MSG("Couldn't acquire read-lock on shared message queue");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
 
   hma_allocator_t * alloc = pub->alloc;
@@ -462,7 +462,7 @@ hazcat_publish(const pub_data_t * pub, void * msg, size_t len)
   if (-1 == fcntl(pub->mq->fd, F_SETLK, &fl)) {
     perror("fcntl");
     RMW_SET_ERROR_MSG("Couldn't release read-lock on shared message queue");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
 
   // Signal that data was published
@@ -470,15 +470,15 @@ hazcat_publish(const pub_data_t * pub, void * msg, size_t len)
   // if (-1 == fcntl(pub->mq->signalfd, F_SETSIG, SIGMSG)) {
   //   perror("fcntl");
   //   RMW_SET_ERROR_MSG("Failed to signal message availability");
-  //   return RMW_RET_ERROR;
+  //   return HAZCAT_RET_ERROR;
   // }
   char dummy = 'e';
   if (0 >= write(pub->mq->signalfd, &dummy, 1)) {
     perror("write");
     RMW_SET_ERROR_MSG("Failed to signal message availability");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
-  return RMW_RET_OK;
+  return HAZCAT_RET_OK;
 }
 
 // Fetches a message reference from shared message queue.
@@ -618,7 +618,7 @@ hazcat_take(sub_data_t * sub)
   return ret;
 }
 
-rmw_ret_t
+int
 hazcat_unregister_publisher(pub_data_t * pub)
 {
   // TODO(nightduck): What if different publishers use the same allocator?
@@ -627,7 +627,7 @@ hazcat_unregister_publisher(pub_data_t * pub)
   mq_node_t * it = pub->mq;
   if (NULL == it) {
     RMW_SET_ERROR_MSG("Publisher not registered");
-    return RMW_RET_INVALID_ARGUMENT;
+    return HAZCAT_RET_INVALID_ARGUMENT;
   }
 
   // Remove pub's reference to the message queue
@@ -637,7 +637,7 @@ hazcat_unregister_publisher(pub_data_t * pub)
   struct flock fl = {F_WRLCK, SEEK_SET, 0, 0, 0};
   if (-1 == fcntl(it->fd, F_SETLKW, &fl)) {
     RMW_SET_ERROR_MSG("Couldn't acquire lock on shared message queue");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
 
   // Decrement publisher count
@@ -645,7 +645,7 @@ hazcat_unregister_publisher(pub_data_t * pub)
     it->elem->pub_count--;
   } else {
     RMW_SET_ERROR_MSG("Publisher count is zero when attempting to unregister.");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
 
   // TODO(nightduck): See if there's a way to downscale (or don't bother)
@@ -665,15 +665,15 @@ hazcat_unregister_publisher(pub_data_t * pub)
     if (fstat(it->fd, &st)) {
       perror("fstat");
       RMW_SET_ERROR_MSG("Error getting size of message queue for destruction");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
     if (munmap(it->elem, st.st_size)) {
       RMW_SET_ERROR_MSG("Error unmapping message queue");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
     if (shm_unlink(it->file_name)) {
       RMW_SET_ERROR_MSG("Error destroying message queue");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
   }
 
@@ -681,13 +681,13 @@ hazcat_unregister_publisher(pub_data_t * pub)
   fl.l_type = F_UNLCK;
   if (-1 == fcntl(it->fd, F_SETLK, &fl)) {
     RMW_SET_ERROR_MSG("Couldn't release lock on shared message queue");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
 
-  return RMW_RET_OK;
+  return HAZCAT_RET_OK;
 }
 
-rmw_ret_t
+int
 hazcat_unregister_subscription(sub_data_t * sub)
 {
   // TODO(nightduck): What if different subscriptions use the same allocator?
@@ -696,7 +696,7 @@ hazcat_unregister_subscription(sub_data_t * sub)
   mq_node_t * it = sub->mq;
   if (NULL == it) {
     RMW_SET_ERROR_MSG("Publisher not registered");
-    return RMW_RET_INVALID_ARGUMENT;
+    return HAZCAT_RET_INVALID_ARGUMENT;
   }
 
   // Remove pub's reference to the message queue
@@ -706,7 +706,7 @@ hazcat_unregister_subscription(sub_data_t * sub)
   struct flock fl = {F_WRLCK, SEEK_SET, 0, 0, 0};
   if (-1 == fcntl(it->fd, F_SETLKW, &fl)) {
     RMW_SET_ERROR_MSG("Couldn't acquire lock on shared message queue");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
 
   // Decrement subscription count
@@ -714,7 +714,7 @@ hazcat_unregister_subscription(sub_data_t * sub)
     it->elem->sub_count--;
   } else {
     RMW_SET_ERROR_MSG("Subscription count is zero when attempting to unregister.");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
 
   // TODO(nightduck): See if there's a way to downscale (or don't bother)
@@ -727,15 +727,15 @@ hazcat_unregister_subscription(sub_data_t * sub)
     if (fstat(it->fd, &st)) {
       perror("fstat");
       RMW_SET_ERROR_MSG("Error getting size of message queue for destruction");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
     if (munmap(it->elem, st.st_size)) {
       RMW_SET_ERROR_MSG("Error unmapping message queue");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
     if (shm_unlink(it->file_name)) {
       RMW_SET_ERROR_MSG("Error destroying message queue");
-      return RMW_RET_ERROR;
+      return HAZCAT_RET_ERROR;
     }
   }
 
@@ -743,10 +743,10 @@ hazcat_unregister_subscription(sub_data_t * sub)
   fl.l_type = F_UNLCK;
   if (-1 == fcntl(it->fd, F_SETLK, &fl)) {
     RMW_SET_ERROR_MSG("Couldn't release lock on shared message queue");
-    return RMW_RET_ERROR;
+    return HAZCAT_RET_ERROR;
   }
 
-  return RMW_RET_OK;
+  return HAZCAT_RET_OK;
 }
 
 // TODO(nightduck): Implement read lock. Otherwise, this creates an cosmetic race condition.

@@ -28,36 +28,34 @@ extern "C"
 #endif
 
 #include <stdint.h>
-#include "rmw/allocators.h"
 #include "rmw/error_handling.h"
-#include "rmw/rmw.h"
 
 #include "hazcat/types.h"
 
 // Misc initialization stuff.
-rmw_ret_t
+int
 hazcat_init();
 
 // Misc destruction stuff
-rmw_ret_t
+int
 hazcat_fini();
 
 // Registers a publisher with the zero copy buffer associated with it's name. If none exists, one
 // is created. If an existing one does not accommodate the memory domain or history requirements of
 // the publisher, it will be resized. Messages will not be able to be published or taken while
 // this resize operation is taking place
-rmw_ret_t
+int
 hazcat_register_publisher(pub_data_t * pub, const char * topic_name);
 
 // Registers a subscription with the zero copy buffer associated with it's name. If none exists, one
 // is created. If an existing one does not accommodate the memory domain or history requirements of
 // the subscription, it will be resized. Messages will not be able to be published or taken while
 // this resize operation is taking place
-rmw_ret_t
+int
 hazcat_register_subscription(sub_data_t * sub, const char * topic_name);
 
 // Stores allocator reference and message offset into message queue, has write lock on row
-rmw_ret_t
+int
 hazcat_publish(const pub_data_t * pub, void * msg, size_t len);
 
 // Take's loaned message for subscriber, copying it into the correct memory domain, if needed.
@@ -65,10 +63,10 @@ hazcat_publish(const pub_data_t * pub, void * msg, size_t len);
 msg_ref_t
 hazcat_take(sub_data_t * sub);
 
-rmw_ret_t
+int
 hazcat_unregister_publisher(pub_data_t * pub);
 
-rmw_ret_t
+int
 hazcat_unregister_subscription(sub_data_t * sub);
 
 hma_allocator_t *

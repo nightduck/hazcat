@@ -39,6 +39,11 @@ extern "C"
 # include <stdatomic.h>
 #endif
 
+// Return codes
+#define HAZCAT_RET_OK 0
+#define HAZCAT_RET_ERROR 1
+#define HAZCAT_RET_INVALID_ARGUMENT 11
+
 
 #define DOMAINS_PER_TOPIC 32  // NOTE: Changes require editting ref_bits_t and lock_domain too
 
